@@ -1,0 +1,84 @@
+---
+- name: Deploy Standalone Pi-hole with Macvlan
+  hosts: pihole_host
+  become: true
+  vars_files:
+    - vars/secrets.yml
+  vars:
+    pihole_ip: "10.7.11.13"
+    bridge_ip: "10.7.11.210"
+    parent_interface: "eth0" # CHANGE THIS to ens18 or your actual dev
+    gateway: "10.7.11.1"
+    subnet: "10.7.11.0/24"
+
+  tasks:
+    - name: Create Docker Macvlan Network
+      community.docker.docker_network:
+        name: pihole_macvlan
+        driver: macvlan
+        driver_options:
+          parent: "{{ parent_interface }}"
+        ipam_config:
+          - subnet: "{{ subnet }}"
+            gateway: "{{ gateway }}"
+      tags: [network_setup, always]
+
+    - name: Disable systemd-resolved stub listener
+      lineinfile:
+        path: /etc/systemd/resolved.conf
+        regexp: "^#?DNSStubListener="
+        line: "DNSStubListener=no"
+      notify: restart resolved
+
+    - name: Create Macvlan Bridge interface on Host
+      shell: |
+        ip link add ph-bridge link {{ parent_interface }} type macvlan mode bridge || true
+        ip addr add {{ bridge_ip }}/32 dev ph-bridge || true
+        ip link set ph-bridge up || true
+        ip route add {{ pihole_ip }} dev ph-bridge || true
+      changed_when: false
+
+    - name: Create Pi-hole directory
+      file:
+        path: "/home/{{ ansible_user }}/pihole"
+        state: directory
+        owner: "{{ ansible_user }}"
+
+    - name: Deploy Pi-hole Container
+      community.docker.docker_container:
+        name: pihole
+        image: pihole/pihole:latest
+        restart_policy: unless-stopped
+        hostname: pihole-standalone
+        capabilities:
+          - NET_ADMIN
+        networks:
+          - name: pihole_macvlan
+            ipv4_address: "{{ pihole_ip }}"
+        env:
+          TZ: "America/Los_Angeles"
+          WEBPASSWORD: "{{ vault_pihole_password }}"
+          PIHOLE_DNS_: "8.8.8.8;8.8.4.4;10.7.11.1"
+          DNSMASQ_LISTENING: "all"
+          FTLCONF_REPLY_ADDR4: "{{ pihole_ip }}"
+        volumes:
+          - "/home/{{ ansible_user }}/pihole/etc:/etc/pihole"
+          - "/home/{{ ansible_user }}/pihole/dnsmasq.d:/etc/dnsmasq.d"
+
+  handlers:
+    - name: restart resolved
+      systemd:
+        name: systemd-resolved
+        state: restarted
+
+  # Define the network as a separate task to ensure it exists
+  pre_tasks:
+    - name: Create Docker Macvlan Network
+      community.docker.docker_network:
+        name: pihole_macvlan
+        driver: macvlan
+        driver_options:
+          parent: "{{ parent_interface }}"
+        ipam_config:
+          - subnet: "{{ subnet }}"
+            gateway: "{{ gateway }}"

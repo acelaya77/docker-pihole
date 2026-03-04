@@ -1,0 +1,11 @@
+---
+- name: Vault Decryption Test
+  hosts: localhost # Run this locally on your Garuda box
+  gather_facts: false
+  vars_files:
+    - vars/secrets.yml
+
+  tasks:
+    - name: Show me the decrypted secret
+      debug:
+        var: vault_pihole_password
