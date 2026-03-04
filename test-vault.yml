@@ -8,4 +8,4 @@
   tasks:
     - name: Show me the decrypted secret
       debug:
-        var: vault_pihole_password
+        msg: "{{ vault_pihole_password | b64encode | b64decode }}"

@@ -6,6 +6,7 @@
     - vars/secrets.yml
   vars:
     pihole_ip: "10.7.11.13"
+    ntp_server_ip: "10.7.11.1"
     bridge_ip: "10.7.11.210"
     parent_interface: "eth0" # CHANGE THIS to ens18 or your actual dev
     gateway: "10.7.11.1"
@@ -43,6 +44,8 @@
         path: "/home/{{ ansible_user }}/pihole"
         state: directory
         owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "755"
 
     - name: Deploy Pi-hole Container
       community.docker.docker_container:
@@ -51,19 +54,39 @@
         restart_policy: unless-stopped
         hostname: pihole-standalone
         capabilities:
-          - NET_ADMIN
+          - CAP_NET_ADMIN
+          - CAP_SYS_TIME
+          - CAP_CHOWN
+          - CAP_SYS_NICE
+          - CAP_NET_BIND_SERVICE
+          - CAP_NET_RAW
         networks:
           - name: pihole_macvlan
             ipv4_address: "{{ pihole_ip }}"
         env:
           TZ: "America/Los_Angeles"
-          WEBPASSWORD: "{{ vault_pihole_password }}"
-          PIHOLE_DNS_: "8.8.8.8;8.8.4.4;10.7.11.1"
-          DNSMASQ_LISTENING: "all"
-          FTLCONF_REPLY_ADDR4: "{{ pihole_ip }}"
+          FTLCONF_webserver_api_password: "{{ vault_pihole_password }}"
+          FTLCONF_dns_upstreams: "8.8.8.8;8.8.4.4;10.7.11.1"
+          FTLCONF_dns_listeningMode: "all"
+          # FTLCONF_network_ipv4_address: "{{ pihole_ip }}"
+          FTLCONF_ntp_ipv4_address: "{{ ntp_server_ip }}"
         volumes:
           - "/home/{{ ansible_user }}/pihole/etc:/etc/pihole"
           - "/home/{{ ansible_user }}/pihole/dnsmasq.d:/etc/dnsmasq.d"
+
+    - name: Check pihole container
+      ansible.builtin.uri:
+        url: "http://{{ pihole_ip }}/admin"
+      register: pihole_result
+      until: pihole_result.status == 200
+      retries: 5
+      delay: 10
+
+    - name: Remove stale images
+      community.docker.docker_prune:
+        images: true
+        images_filters:
+          dangling: false
 
   handlers:
     - name: restart resolved
